@@ -60,7 +60,10 @@ export function StatsPage() {
   const maxVehicle = vehicleEntries[0]?.[1] ?? 1
 
   const violationLabel = (key: string) =>
-    key === 'no_helmet' ? 'No Helmet' : key === 'no_seatbelt' ? 'No Seatbelt' : key
+    key === 'no_helmet' ? 'No Helmet'
+    : key === 'no_seatbelt' ? 'No Seatbelt'
+    : key === 'triple_riding' ? 'Triple Riding'
+    : key
 
   return (
     <div className="flex flex-col gap-6">

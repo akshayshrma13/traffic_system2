@@ -14,7 +14,11 @@ import { analyzeImage, evidenceImageUrl, type AnalyzeResponse } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 function ViolationBadge({ type }: { type: string }) {
-  const label = type === 'no_helmet' ? 'No Helmet' : type === 'no_seatbelt' ? 'No Seatbelt' : type
+  const label =
+    type === 'no_helmet' ? 'No Helmet'
+    : type === 'no_seatbelt' ? 'No Seatbelt'
+    : type === 'triple_riding' ? 'Triple Riding'
+    : type
   return (
     <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium bg-[--violation]/15 text-[--violation] border border-[--violation]/20">
       <ShieldAlert className="size-3" />

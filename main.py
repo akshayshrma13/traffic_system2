@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pipeline import TrafficViolationPipeline
 from pipeline.config import Config
 from pipeline.utils import load_all_evidence
+from pipeline.face_match_service import FaceMatchService
 
 # ============ INITIALIZATION ============
 
@@ -30,6 +31,7 @@ app.add_middleware(
 
 # Initialize pipeline (singleton instance)
 pipeline = TrafficViolationPipeline()
+face_match_service = FaceMatchService()
 
 # Serve stored evidence images/JSON for the frontend violations log
 Config.ensure_folders_exist()
@@ -54,7 +56,7 @@ async def health_check():
     return {
         "status": "healthy",
         "models_loaded": False,  # Models lazy-load on first use
-        "evidence_folder_exists": os.path.exists("./evidence"),
+        "evidence_folder_exists": os.path.exists(Config.EVIDENCE_FOLDER),
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
@@ -223,6 +225,75 @@ async def get_stats():
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+# ============ ENDPOINT 4: FACE MATCH (INDEPENDENT) ============
+
+@app.post("/face-match/compare")
+async def face_match_compare(
+    person_image: UploadFile = File(..., description="Reference person/criminal image"),
+    target_image: UploadFile = File(..., description="Image to compare against"),
+):
+    """Compare two uploaded face images and return whether they match."""
+    try:
+        person_bytes = await person_image.read()
+        target_bytes = await target_image.read()
+        if not person_bytes or not target_bytes:
+            raise HTTPException(status_code=400, detail="Both image files are required")
+
+        result = face_match_service.compare_images(person_bytes, target_bytes)
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Comparison failed"))
+
+        return JSONResponse(status_code=200, content={"success": True, **result})
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in /face-match/compare: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/face-match/violation")
+async def face_match_violation(
+    person_image: UploadFile = File(..., description="Reference person/criminal image"),
+    violation_id: str = Form(None, description="Stored violation id/timestamp to compare against"),
+    scan_all_violations: bool = Form(False, description="Scan entire violation database"),
+):
+    """Compare person against one stored violation or scan the violation database."""
+    try:
+        person_bytes = await person_image.read()
+        if not person_bytes:
+            raise HTTPException(status_code=400, detail="Empty person_image file")
+
+        has_violation_id = violation_id is not None and violation_id.strip() != ""
+
+        if has_violation_id and scan_all_violations:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide either violation_id or scan_all_violations, not both",
+            )
+        if not has_violation_id and not scan_all_violations:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide violation_id or set scan_all_violations=true",
+            )
+
+        if has_violation_id:
+            result = face_match_service.compare_with_violation(
+                person_bytes,
+                violation_id.strip(),
+            )
+        else:
+            result = face_match_service.scan_violation_database(person_bytes)
+
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Face match failed"))
+
+        return JSONResponse(status_code=200, content={"success": True, **result})
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in /face-match/violation: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 
 # ============ ENDPOINT 5: API INFO ============
 
@@ -256,12 +327,18 @@ async def info():
                     "path": "/stats",
                     "description": "Get aggregated statistics"
                 },
-                "recognize_faces": {
+                "face_match_compare": {
                     "method": "POST",
-                    "path": "/recognize-faces",
-                    "description": "Optional: facial recognition",
-                    "parameters": ["file (image)"]
-                }
+                    "path": "/face-match/compare",
+                    "description": "Compare two uploaded face images",
+                    "parameters": ["person_image", "target_image"],
+                },
+                "face_match_violation": {
+                    "method": "POST",
+                    "path": "/face-match/violation",
+                    "description": "Compare person against stored violation(s)",
+                    "parameters": ["person_image", "violation_id OR scan_all_violations"],
+                },
             },
             "models": {
                 "vehicle_detection": ["bdd100k_opensource.pt", "UVH-26-MV-YOLOv11-S.pt"],
