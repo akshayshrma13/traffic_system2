@@ -14,15 +14,8 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription
 } from '@/components/ui/dialog'
-import { fetchViolations, evidenceImageUrl, SWR_KEYS, type EvidenceRecord } from '@/lib/api'
+import { fetchViolations, evidenceImageUrl, violationLabel, SWR_KEYS, type EvidenceRecord } from '@/lib/api'
 import { cn } from '@/lib/utils'
-
-function violationLabel(type: string): string {
-  if (type === 'no_helmet') return 'No Helmet'
-  if (type === 'no_seatbelt') return 'No Seatbelt'
-  if (type === 'triple_riding') return 'Triple Riding'
-  return type
-}
 
 function ViolationTypeBadge({ type }: { type: string }) {
   return (
