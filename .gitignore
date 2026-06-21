@@ -1,0 +1,8 @@
+evidence/
+face_database/
+test_images_for_preprocessing/
+traffic_venv/
+__pycache__/
+*.pyc
+.env
+EOF
