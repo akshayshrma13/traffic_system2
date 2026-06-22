@@ -19,6 +19,7 @@ import {
   fetchCollectionViolations,
   fetchCollectionViolationDetail,
   verifyViolation,
+  evidenceAssetUrl,
   violationLabel,
   type CollectionViolationRecord,
   type CollectionViolationDetailResponse,
@@ -251,7 +252,7 @@ function ViolationsQueryPart() {
             <div className="relative w-full">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={selectedRecord.image_url}
+                src={evidenceAssetUrl(selectedRecord.image_url) || "/placeholder.svg"}
                 alt="Annotated evidence"
                 className="w-full rounded-lg"
               />
@@ -407,7 +408,7 @@ function ViolationVerificationPart() {
                 <CardContent className="p-0">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={verificationData.record.image_url}
+                    src={evidenceAssetUrl(verificationData.record.image_url) || "/placeholder.svg"}
                     alt="Evidence"
                     className="w-full h-[200px] object-cover"
                   />
