@@ -2,7 +2,7 @@
 
 import useSWR from 'swr'
 import {
-  BarChart3, ShieldAlert, CreditCard, TrendingUp, RefreshCw, AlertCircle, Car
+  BarChart3, ShieldAlert, CreditCard, TrendingUp, RefreshCw, AlertCircle, Car, MapPin
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -10,7 +10,8 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
-import { fetchStats, violationLabel, SWR_KEYS } from '@/lib/api'
+import { fetchStats, fetchHeatmapPoints, violationLabel, SWR_KEYS } from '@/lib/api'
+import { Heatmap } from './heatmap'
 
 function StatCard({
   icon: Icon,
@@ -47,6 +48,12 @@ export function StatsPage() {
   const { data, error, isLoading, mutate } = useSWR(SWR_KEYS.stats, fetchStats, {
     refreshInterval: 60000,
   })
+
+  const { data: heatmapPoints, isLoading: heatmapLoading } = useSWR(
+    'heatmap-points',
+    () => fetchHeatmapPoints(false),
+    { refreshInterval: 60000 }
+  )
 
   const violationEntries = data && data.violation_counts
     ? Object.entries(data.violation_counts).sort((a, b) => b[1] - a[1])
@@ -133,6 +140,19 @@ export function StatsPage() {
               value={(data.average_violations_per_record ?? 0).toFixed(2)}
               sub="Per record"
             />
+          </div>
+
+          {/* Heatmap section */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <MapPin className="size-4 text-primary" />
+                Violation Heatmap
+              </h3>
+            </div>
+            {heatmapPoints && (
+              <Heatmap points={heatmapPoints} isLoading={heatmapLoading} />
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

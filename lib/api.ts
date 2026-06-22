@@ -105,6 +105,109 @@ export interface StatsResponse {
   vehicle_class_counts: Record<string, number>
 }
 
+export interface HeatmapPoint {
+  id: string
+  lat: number
+  lon: number
+  timestamp: string
+  weight: number
+  violation_types: string[]
+  violation_count: number
+  image_url: string
+}
+
+export interface HeatmapResponse {
+  success: boolean
+  static_prefix: string
+  total_points: number
+  points: HeatmapPoint[]
+}
+
+export interface CollectionViolationRecord {
+  id: string
+  timestamp: string
+  gps_lat: number
+  gps_lon: number
+  gps: [number, number]
+  plates: PlateDetection[]
+  violations: ViolationDetection[]
+  image_filename: string
+  json_filename: string
+  image_url: string
+  json_url: string
+  system_outputs: {
+    vehicle_detected: boolean
+    license_plate_detected: boolean
+    ocr_detected: boolean
+    violation_types: string[]
+    plate_texts: string[]
+  }
+}
+
+export interface CollectionViolationsResponse {
+  success: boolean
+  evidence_folder: string
+  static_prefix: string
+  total_records: number
+  records: CollectionViolationRecord[]
+}
+
+export interface ModelVerificationLabel {
+  detected: boolean
+  correct: boolean
+  notes?: string
+}
+
+export interface VerifyViolationRequest {
+  violation_id: string
+  violation_confirmed: boolean
+  ocr: ModelVerificationLabel
+  license_plate: ModelVerificationLabel
+  vehicle: ModelVerificationLabel
+  helmet?: ModelVerificationLabel
+  seatbelt?: ModelVerificationLabel
+  annotation_notes?: string
+}
+
+export interface TrainingRecord {
+  id: string
+  source_violation_id: string
+  verified_at: string
+  category: string
+  human_labels: Record<string, ModelVerificationLabel>
+  annotation_notes?: string
+  image_filename: string
+  json_filename: string
+  image_url: string
+  json_url: string
+}
+
+export interface TrainingStats {
+  total_confirmed: number
+  total_corrections: number
+  total_training_records: number
+  confirmed_violation_types: Record<string, number>
+  corrections_violation_types: Record<string, number>
+}
+
+export interface VerifyViolationResponse {
+  success: boolean
+  training_record: TrainingRecord
+  training_stats: TrainingStats
+}
+
+export interface CollectionViolationDetailResponse {
+  success: boolean
+  record: CollectionViolationRecord
+  system_outputs: {
+    vehicle_detected: boolean
+    license_plate_detected: boolean
+    ocr_detected: boolean
+    violation_types: string[]
+    plate_texts: string[]
+  }
+}
+
 export interface HealthResponse {
   status: string
   evidence_folder_exists: boolean
@@ -297,6 +400,44 @@ export async function faceMatchViolation(
     form.append('violation_id', opts.violationId)
   }
   return apiFetch<FaceScanResult>('/face-match/violation', { method: 'POST', body: form })
+}
+
+// ── Collection & Heatmap Endpoints ──────────────────────────────────────────
+
+export async function fetchCollectionViolations(
+  includeZeroGps: boolean = true
+): Promise<CollectionViolationRecord[]> {
+  const data = await apiFetch<CollectionViolationsResponse>(
+    `/collection/violations?include_zero_gps=${includeZeroGps}`
+  )
+  return data.records ?? []
+}
+
+export async function fetchHeatmapPoints(
+  includeZeroGps: boolean = false
+): Promise<HeatmapPoint[]> {
+  const data = await apiFetch<HeatmapResponse>(
+    `/collection/heatmap?include_zero_gps=${includeZeroGps}`
+  )
+  return data.points ?? []
+}
+
+export async function fetchCollectionViolationDetail(
+  violationId: string
+): Promise<CollectionViolationDetailResponse> {
+  return apiFetch<CollectionViolationDetailResponse>(
+    `/collection/violations/${encodeURIComponent(violationId)}`
+  )
+}
+
+export async function verifyViolation(
+  request: VerifyViolationRequest
+): Promise<VerifyViolationResponse> {
+  return apiFetch<VerifyViolationResponse>('/collection/verify', {
+    method: 'POST',
+    body: JSON.stringify(request),
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
 
 // SWR key factories (prevents magic strings across components)
