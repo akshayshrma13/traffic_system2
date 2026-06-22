@@ -153,48 +153,118 @@ class TrafficViolationPipeline:
             print(f"Error detecting vehicles: {e}")
             return []
     
+    # # ============ METHOD 4: DETECT LICENSE PLATES ============
+    
+    # def detect_license_plates(self, image, vehicle_boxes=None):
+    #     """
+    #     Detect license plates directly on the entire original frame.
+    #     Cropping and vehicle-class prerequisites have been removed.
+    #     """
+    #     try:
+    #         plate_detections = []
+    #         model = self.model_manager.load_license_plate()
+            
+    #         # Run plate detection across the full global frame dimensions
+    #         print(Config.MODEL_INPUT_SIZE)
+    #         results = model.predict(
+    #             image,
+    #             conf=Config.CONFIDENCE_THRESHOLDS["license_plate"],
+    #             # imgzs=Config.MODEL_INPUT_SIZE,
+    #             verbose=False
+    #         )
+    #         # results = model(image)[0]
+    #         # print("printing no of license plates recognized: ")
+    #         # print(len(results))
+            
+    #         if results and len(results) > 0:
+    #             for result in results:
+    #                 if result.boxes is not None and len(result.boxes) > 0:
+    #                     for box_obj in result.boxes:
+    #                         px1, py1, px2, py2 = box_obj.xyxy[0].cpu().numpy()
+    #                         confidence = float(box_obj.conf.cpu().numpy()[0])
+    #                         print([float(px1), float(py1), float(px2), float(py2)])
+    #                         plate_detections.append({
+    #                             "box": [float(px1), float(py1), float(px2), float(py2)],
+    #                             "confidence": confidence,
+    #                             "vehicle_idx": None  # Global detection mode unlinked from standard indexes
+    #                         })
+            
+    #         return plate_detections
+    #     except Exception as e:
+    #         print(f"Error detecting license plates globally: {e}")
+            
+    #         return []
+    
     # ============ METHOD 4: DETECT LICENSE PLATES ============
     
     def detect_license_plates(self, image, vehicle_boxes=None):
         """
-        Detect license plates directly on the entire original frame.
-        Cropping and vehicle-class prerequisites have been removed.
+        Detect license plates across the entire original frame globally,
+        then map them back to their parent vehicles using bounding box intersections.
+        
+        Args:
+            image: Original image (BGR, numpy array)
+            vehicle_boxes: List of vehicle detections containing bounding boxes
+        
+        Returns:
+            List of plate detections with vehicle indices assigned via spatial overlap
         """
         try:
             plate_detections = []
             model = self.model_manager.load_license_plate()
             
-            # Run plate detection across the full global frame dimensions
-            print(Config.MODEL_INPUT_SIZE)
+            # 1. Run plate detection ONCE on the entire global image frame
             results = model.predict(
                 image,
                 conf=Config.CONFIDENCE_THRESHOLDS["license_plate"],
-                # imgzs=Config.MODEL_INPUT_SIZE,
                 verbose=False
             )
-            # results = model(image)[0]
-            # print("printing no of license plates recognized: ")
-            # print(len(results))
             
-            if results and len(results) > 0:
+            # Extract all global plate coordinates using robust array unpacking
+            global_plates = []
+            if results:
                 for result in results:
-                    if result.boxes is not None and len(result.boxes) > 0:
-                        for box_obj in result.boxes:
-                            px1, py1, px2, py2 = box_obj.xyxy[0].cpu().numpy()
-                            confidence = float(box_obj.conf.cpu().numpy()[0])
-                            print([float(px1), float(py1), float(px2), float(py2)])
-                            plate_detections.append({
-                                "box": [float(px1), float(py1), float(px2), float(py2)],
-                                "confidence": confidence,
-                                "vehicle_idx": None  # Global detection mode unlinked from standard indexes
+                    if result.boxes is not None:
+                        boxes = result.boxes.xyxy.cpu().numpy()
+                        scores = result.boxes.conf.cpu().numpy()
+                        
+                        for box, score in zip(boxes, scores):
+                            global_plates.append({
+                                "box": [float(box[0]), float(box[1]), float(box[2]), float(box[3])],
+                                "confidence": float(score),
+                                "vehicle_idx": None  # Will be mapped next
                             })
             
+            # 2. Map plates to vehicles based on bounding box inclusion
+            if vehicle_boxes and global_plates:
+                for plate in global_plates:
+                    px1, py1, px2, py2 = plate["box"]
+                    # Calculate center point of the license plate
+                    pcx = (px1 + px2) / 2
+                    pcy = (py1 + py2) / 2
+                    
+                    for vehicle_idx, vehicle in enumerate(vehicle_boxes):
+                        vbox = vehicle.get("box")
+                        if not vbox or len(vbox) < 4:
+                            continue
+                        
+                        vx1, vy1, vx2, vy2 = vbox[0], vbox[1], vbox[2], vbox[3]
+                        
+                        # Check if the plate center point falls completely inside the vehicle box
+                        if vx1 <= pcx <= vx2 and vy1 <= pcy <= vy2:
+                            plate["vehicle_idx"] = vehicle_idx
+                            break  # Linked to the matching vehicle, move to the next plate
+                            
+                    plate_detections.append(plate)
+            else:
+                # If no vehicles are provided, return the global plate detections unlinked
+                plate_detections = global_plates
+            
             return plate_detections
+            
         except Exception as e:
             print(f"Error detecting license plates globally: {e}")
-            
             return []
-    
     # ============ METHOD 5: EXTRACT PLATE TEXT ============
     
     def extract_plate_text(self, image, plate_boxes):
@@ -617,7 +687,8 @@ class TrafficViolationPipeline:
             vehicle_boxes = self.detect_vehicles(original_img)
             
             # Step 4: Detect license plates (on cropped regions)
-            plate_boxes = self.detect_license_plates(original_img, vehicle_boxes=None)
+            # FIX: Pass the valid vehicle_boxes detected in Step 3 instead of None
+            plate_boxes = self.detect_license_plates(original_img, vehicle_boxes=vehicle_boxes)
             
             # Step 5: Extract plate text
             plate_results = self.extract_plate_text(original_img, plate_boxes)

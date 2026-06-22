@@ -1,12 +1,25 @@
-"""OCR Processing Module - License Plate Text Extraction with Strict Validation"""
+"""OCR Processing Module - License Plate Text Extraction with Strict Validation (v3)
+
+Version 3 improvements:
+- Enable RapidOCR detection mode for robustness (handles rotated/skewed plates)
+- Add comprehensive logging for debugging validation failures
+- Safer config handling with fallback defaults
+- Enhanced OCR output parsing with debug info
+- Better error handling and recovery
+"""
 
 import cv2
 import numpy as np
 import re
+import logging
 from rapidocr_onnxruntime import RapidOCR
 from pydantic import BaseModel, field_validator, ValidationError
 from typing import Optional
 from .config import Config
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # Valid Indian state codes (29 states + 8 UTs + special categories)
 INDIAN_STATE_CODES = {
@@ -86,11 +99,29 @@ class IndianLicensePlate(BaseModel):
 
 
 class OCRProcessor:
-    """Handles license plate text extraction using RapidOCR with strict validation"""
+    """Handles license plate text extraction using RapidOCR with strict validation (v3)"""
     
     def __init__(self):
-        """Initialize RapidOCR engine"""
+        """Initialize RapidOCR engine with optimal settings"""
         self.ocr_engine = RapidOCR()
+        
+        # Safe config retrieval with sensible defaults
+        self.border_px = self._get_config("white_border_px", 12)
+        self.use_detection = self._get_config("use_ocr_detection", True)
+        self.use_classification = self._get_config("use_ocr_classification", False)
+        
+        logger.info(
+            f"OCRProcessor initialized: border_px={self.border_px}, "
+            f"use_detection={self.use_detection}, use_classification={self.use_classification}"
+        )
+    
+    def _get_config(self, key: str, default=None):
+        """Safely retrieve config with fallback to default"""
+        try:
+            return Config.OCR_PARAMS.get(key, default)
+        except (AttributeError, KeyError):
+            logger.warning(f"Config key '{key}' not found, using default: {default}")
+            return default
     
     def extract_plate_text(self, image, plate_boxes):
         """
@@ -98,6 +129,12 @@ class OCRProcessor:
         
         ONLY valid plates are added to results.
         Invalid plates are NOT stored (not added to results list).
+        
+        Features (v3):
+        - Enabled RapidOCR detection mode for rotated/skewed plate robustness
+        - Comprehensive debug logging for validation failures
+        - Safe config handling with fallback defaults
+        - Enhanced error recovery
         
         Args:
             image: Original image (BGR, not preprocessed)
@@ -110,55 +147,96 @@ class OCRProcessor:
             Invalid detections are silently dropped (not returned).
         """
         results = []
+        plate_count = 0
+        valid_count = 0
         
-        for plate_box in plate_boxes:
+        for plate_idx, plate_box in enumerate(plate_boxes):
             try:
+                plate_count += 1
                 box = plate_box["box"]
+                detection_confidence = plate_box.get("confidence", 0.0)
+                
                 x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+                
+                logger.debug(f"[Plate {plate_idx}] Box: ({x1},{y1}) -> ({x2},{y2}), "
+                           f"Detection conf: {detection_confidence:.3f}")
                 
                 # Crop plate region from image
                 plate_crop = image[y1:y2, x1:x2]
                 
                 if plate_crop.size == 0:
+                    logger.warning(f"[Plate {plate_idx}] Empty crop (size=0), skipping")
                     continue
                 
+                # Log crop dimensions
+                crop_h, crop_w = plate_crop.shape[:2]
+                logger.debug(f"[Plate {plate_idx}] Crop size: {crop_w}x{crop_h}")
+                
                 # Add white border padding (prevents edge characters from being cut off)
-                border_px = Config.OCR_PARAMS["white_border_px"]
                 plate_with_border = cv2.copyMakeBorder(
                     plate_crop,
-                    border_px, border_px, border_px, border_px,
+                    self.border_px, self.border_px, self.border_px, self.border_px,
                     cv2.BORDER_CONSTANT,
-                    value=(255, 255, 255)
+                    value=(255, 255, 255)  # White border for all channels (BGR)
                 )
                 
                 # Run RapidOCR on padded crop
+                # v3: ENABLE DETECTION MODE for robustness against rotated/skewed plates
                 ocr_output, _ = self.ocr_engine(
                     plate_with_border,
-                    use_det=False,
-                    use_cls=False,
-                    use_rec=True,
+                    use_det=self.use_detection,        # v3: True (was False in v2)
+                    use_cls=self.use_classification,   # Keep False for speed
+                    use_rec=True                        # Always True
                 )
-
+                
                 if ocr_output:
+                    logger.debug(f"[Plate {plate_idx}] RapidOCR output structures: {len(ocr_output)} detections")
+                    
                     extracted_texts = []
 
-                    for detection in ocr_output:
-                        if len(detection) >= 2:
-                            if isinstance(detection[0], str):
-                                text = detection[0]
-                                confidence = float(detection[1])
-                            else:
-                                text = detection[1]
-                                confidence = float(detection[2]) if len(detection) > 2 else 0.0
-                            extracted_texts.append((text, confidence))
+                    for det_idx, detection in enumerate(ocr_output):
+                        try:
+                            text = None
+                            confidence = 0.0
+                            
+                            # v3: Enhanced parsing with better debugging
+                            if len(detection) >= 2:
+                                # Try Structure 1: [text, confidence]
+                                if isinstance(detection[0], str):
+                                    text = detection[0]
+                                    confidence = float(detection[1]) if len(detection) > 1 else 0.0
+                                    logger.debug(f"[Plate {plate_idx}][Det {det_idx}] Structure 1: text='{text}', conf={confidence:.3f}")
+                                
+                                # Try Structure 2: [box, text, confidence]
+                                elif len(detection) >= 3:
+                                    text = detection[1]
+                                    confidence = float(detection[2]) if isinstance(detection[2], (int, float)) else 0.0
+                                    logger.debug(f"[Plate {plate_idx}][Det {det_idx}] Structure 2: text='{text}', conf={confidence:.3f}")
+                                
+                                # Fallback: Try to extract any string
+                                elif isinstance(detection[1], str):
+                                    text = detection[1]
+                                    confidence = float(detection[2]) if len(detection) > 2 else 0.0
+                                    logger.debug(f"[Plate {plate_idx}][Det {det_idx}] Fallback: text='{text}', conf={confidence:.3f}")
+                            
+                            if text:
+                                extracted_texts.append((text, confidence))
+                        
+                        except Exception as e:
+                            logger.warning(f"[Plate {plate_idx}][Det {det_idx}] Parse error: {e}, detection={detection}")
+                            continue
                     
                     if extracted_texts:
                         # Combine all detected texts
                         combined_text = "".join([text for text, _ in extracted_texts])
                         avg_confidence = np.mean([conf for _, conf in extracted_texts])
                         
+                        logger.debug(f"[Plate {plate_idx}] Raw OCR: '{combined_text}', avg_conf={avg_confidence:.3f}")
+                        
                         # Clean text: uppercase, alphanumeric only
                         cleaned_text = self._clean_plate_text(combined_text)
+                        
+                        logger.debug(f"[Plate {plate_idx}] Cleaned: '{cleaned_text}'")
                         
                         if cleaned_text:
                             # STRICT VALIDATION: Only store if validation succeeds
@@ -167,20 +245,28 @@ class OCRProcessor:
                             # ✓ ONLY add to results if validation PASSED
                             # ✗ If validation FAILED, do NOT add to results (flagged as NOT_DETECTED implicitly)
                             if validated_plate is not None:
+                                logger.info(f"[Plate {plate_idx}] ✓ VALID: '{cleaned_text}' → '{validated_plate}'")
+                                valid_count += 1
                                 results.append({
                                     "box": box,
                                     "text": validated_plate,
                                     "confidence": avg_confidence,
                                     "validated": True,
-                                    "validation_status": "VALID"
+                                    "validation_status": "VALID",
+                                    "detection_confidence": detection_confidence
                                 })
-                            # else: Invalid plate — NOT stored, NOT added to results
+                            else:
+                                logger.warning(f"[Plate {plate_idx}] ✗ INVALID: '{cleaned_text}' (validation failed)")
+                        else:
+                            logger.warning(f"[Plate {plate_idx}] ✗ EMPTY after cleaning: '{combined_text}'")
+                else:
+                    logger.warning(f"[Plate {plate_idx}] No OCR output (RapidOCR returned empty)")
             
             except Exception as e:
-                # Lenient error handling: skip failed plates, continue
-                # (No logging needed — invalid plates are expected)
+                logger.error(f"[Plate {plate_idx}] Unexpected error: {e}", exc_info=True)
                 continue
         
+        logger.info(f"OCR Extraction complete: {plate_count} plates detected, {valid_count} validated successfully")
         return results
     
     def _clean_plate_text(self, text):
@@ -219,6 +305,9 @@ class OCRProcessor:
             plate = IndianLicensePlate(plate_number=plate_text)
             return plate.plate_number
         except ValidationError as e:
-            # Validation failed — return None
-            # Caller will NOT add this plate to results
+            # v3: Log detailed validation error
+            logger.debug(f"Validation error for '{plate_text}': {e.errors()}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected validation error for '{plate_text}': {e}")
             return None
