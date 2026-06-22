@@ -76,6 +76,26 @@ export interface AnalyzeResponse {
   error?: string
 }
 
+export interface StopLineViolation {
+  track_id: number
+  frame_idx: number
+  bbox: [number, number, number, number]
+  prev_point?: [number, number]
+  curr_point?: [number, number]
+  light_state: string
+}
+
+export interface AnalyzeVideoResponse {
+  success: boolean
+  annotated_video_url: string
+  annotated_video_path?: string
+  results_json_url: string
+  results_json_path?: string
+  violations_count: number
+  violations: StopLineViolation[]
+  error?: string
+}
+
 export interface StatsResponse {
   total_records: number
   total_violations: number
@@ -149,6 +169,32 @@ export async function analyzeImage(
   if (opts?.gpsLon !== undefined) form.append('gps_lon', String(opts.gpsLon))
 
   return apiFetch<AnalyzeResponse>('/analyze', { method: 'POST', body: form })
+}
+
+export async function analyzeVideo(
+  file: File,
+  opts: {
+    stopLine: [number, number, number, number]
+    initialLightState?: 'red' | 'green'
+    confThres?: number
+  }
+): Promise<AnalyzeVideoResponse> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('stop_line', JSON.stringify(opts.stopLine))
+  form.append('initial_light_state', opts.initialLightState ?? 'red')
+  form.append('conf_thres', String(opts.confThres ?? 0.3))
+
+  return apiFetch<AnalyzeVideoResponse>('/analyze-video', { method: 'POST', body: form })
+}
+
+/** Resolve a backend-relative evidence URL (e.g. /evidence/foo.mp4) to a full URL. */
+export function evidenceAssetUrl(relativeUrl: string): string {
+  if (relativeUrl.startsWith('http://') || relativeUrl.startsWith('https://')) {
+    return relativeUrl
+  }
+  const path = relativeUrl.startsWith('/') ? relativeUrl : `/${relativeUrl}`
+  return `${API_BASE}${path}`
 }
 
 /**

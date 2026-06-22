@@ -21,7 +21,7 @@ export default function Home() {
             Traffic Violation Detection
           </h1>
           <p className="text-sm text-muted-foreground mt-1 text-pretty">
-            Analyze road images with AI — detect vehicles, read license plates, and flag helmet &amp; seatbelt violations.
+            Analyze road images and videos — detect violations, read plates, and flag stop-line crossings.
           </p>
         </div>
 
@@ -32,7 +32,7 @@ export default function Home() {
               className="flex items-center gap-1.5 text-xs h-8 px-3 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-md"
             >
               <ScanLine className="size-3.5" />
-              Analyze Image
+              Analyze
             </TabsTrigger>
             <TabsTrigger
               value="violations"
