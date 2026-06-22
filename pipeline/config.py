@@ -18,8 +18,27 @@ class Config:
     }
     
     # ============ FOLDER PATHS ============
-    EVIDENCE_FOLDER = os.path.join(BASE_PATH, "evidence")
+    # Prefer persistent HF/Docker volume at /data/evidence when available
+    _PERSISTENT_EVIDENCE = "/data/evidence"
+    EVIDENCE_FOLDER = os.getenv(
+        "EVIDENCE_FOLDER",
+        _PERSISTENT_EVIDENCE
+        if os.path.isdir(_PERSISTENT_EVIDENCE)
+        else os.path.join(BASE_PATH, "evidence"),
+    )
     FACE_DATABASE_FOLDER = os.path.join(BASE_PATH, "face_database")
+
+    # RL self-verification / retraining dataset (sibling of evidence on /data)
+    _DATA_ROOT = (
+        os.path.dirname(EVIDENCE_FOLDER)
+        if os.path.basename(EVIDENCE_FOLDER) == "evidence"
+        else BASE_PATH
+    )
+    RL_TRAINING_FOLDER = os.getenv(
+        "RL_TRAINING_FOLDER",
+        os.path.join(_DATA_ROOT, "rl_training"),
+    )
+    RL_RETRAIN_THRESHOLD = int(os.getenv("RL_RETRAIN_THRESHOLD", "1000"))
 
     # ============ FACIAL RECOGNITION ============
     FACE_MODEL = "Facenet512"
@@ -150,8 +169,15 @@ class Config:
                 shutil.copy2(bundled, target)
 
     @classmethod
+    def rl_category_folder(cls, category: str) -> str:
+        """Return path for an RL training category ('confirmed' or 'corrections')."""
+        return os.path.join(cls.RL_TRAINING_FOLDER, category)
+
+    @classmethod
     def ensure_folders_exist(cls):
         """Ensure all required folders exist"""
         os.makedirs(cls.EVIDENCE_FOLDER, exist_ok=True)
         os.makedirs(cls.FACE_DATABASE_FOLDER, exist_ok=True)
+        os.makedirs(cls.rl_category_folder("confirmed"), exist_ok=True)
+        os.makedirs(cls.rl_category_folder("corrections"), exist_ok=True)
         cls.setup_deepface_home()
