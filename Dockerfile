@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Create the persistent storage directory BEFORE copying your app files
-RUN mkdir -p /data/evidence
+RUN mkdir -p /data/evidence /data/rl_training/confirmed /data/rl_training/corrections
 
 # Copy requirements and install
 COPY requirements.txt .

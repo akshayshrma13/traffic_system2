@@ -3,16 +3,30 @@
 import os
 import uuid
 import json
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from typing import Optional
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from pipeline import TrafficViolationPipeline
 from pipeline.config import Config
 from pipeline.utils import load_all_evidence
 from pipeline.face_match_service import FaceMatchService
 from pipeline.stopline import process_video_headless
+from pipeline.data_collection import (
+    evidence_static_prefix,
+    training_static_prefix,
+    load_collection_violations,
+    load_heatmap_points,
+    find_evidence_by_id,
+    enrich_evidence_record,
+    verify_violation_for_training,
+    load_all_training_data,
+    get_training_stats,
+    get_system_model_outputs,
+)
 
 # ============ INITIALIZATION ============
 
@@ -40,6 +54,50 @@ face_match_service = FaceMatchService()
 Config.ensure_folders_exist()
 app.mount("/evidence", StaticFiles(directory=Config.EVIDENCE_FOLDER), name="evidence")
 
+# Browser-friendly alias for persistent /data/evidence volume (HF Spaces)
+if os.path.isdir("/data/evidence"):
+    app.mount(
+        "/view-evidence",
+        StaticFiles(directory="/data/evidence"),
+        name="view_evidence",
+    )
+
+# RL training images/JSON for self-verification workflow
+if os.path.isdir(Config.RL_TRAINING_FOLDER):
+    app.mount(
+        "/view-training",
+        StaticFiles(directory=Config.RL_TRAINING_FOLDER),
+        name="view_training",
+    )
+elif os.path.isdir(os.path.join(Config.BASE_PATH, "rl_training")):
+    app.mount(
+        "/training-data",
+        StaticFiles(directory=Config.RL_TRAINING_FOLDER),
+        name="training_data",
+    )
+
+
+# ============ DATA COLLECTION MODELS ============
+
+class ModelVerificationLabel(BaseModel):
+    detected: bool = Field(..., description="Whether the model detected this target")
+    correct: bool = Field(..., description="Whether the human reviewer agrees")
+    notes: Optional[str] = Field(None, description="Correction notes if wrong")
+
+
+class VerifyViolationRequest(BaseModel):
+    violation_id: str = Field(..., description="Evidence id / timestamp stem")
+    violation_confirmed: bool = Field(
+        ...,
+        description="True if the violation is real, false if false positive",
+    )
+    ocr: ModelVerificationLabel
+    license_plate: ModelVerificationLabel
+    vehicle: ModelVerificationLabel
+    helmet: Optional[ModelVerificationLabel] = None
+    seatbelt: Optional[ModelVerificationLabel] = None
+    annotation_notes: Optional[str] = None
+
 
 # ============ HEALTH CHECK ============
 
@@ -60,6 +118,9 @@ async def health_check():
         "status": "healthy",
         "models_loaded": False,  # Models lazy-load on first use
         "evidence_folder_exists": os.path.exists(Config.EVIDENCE_FOLDER),
+        "evidence_folder": Config.EVIDENCE_FOLDER,
+        "rl_training_folder": Config.RL_TRAINING_FOLDER,
+        "view_evidence_mounted": os.path.isdir("/data/evidence"),
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
@@ -217,6 +278,177 @@ async def get_violations():
     
     except Exception as e:
         print(f"Error in /violations: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+# ============ DATA COLLECTION ENDPOINTS ============
+
+@app.get("/collection/violations")
+async def collection_violations(
+    include_zero_gps: bool = Query(
+        True,
+        description="Include records with GPS 0,0 (no location captured)",
+    ),
+):
+    """
+    Full violation collection log with timestamps, GPS, and browser image URLs.
+    Use from frontend violations view or data export without changing /violations.
+    """
+    try:
+        records = load_collection_violations(include_zero_gps=include_zero_gps)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "evidence_folder": Config.EVIDENCE_FOLDER,
+                "static_prefix": evidence_static_prefix(),
+                "total_records": len(records),
+                "records": records,
+            },
+        )
+    except Exception as e:
+        print(f"Error in /collection/violations: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.get("/collection/heatmap")
+async def collection_heatmap(
+    include_zero_gps: bool = Query(
+        False,
+        description="Include 0,0 GPS points (usually excluded for maps)",
+    ),
+):
+    """
+    Heatmap-ready GPS points with violation types and image URLs for map overlay.
+    """
+    try:
+        points = load_heatmap_points(include_zero_gps=include_zero_gps)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "static_prefix": evidence_static_prefix(),
+                "total_points": len(points),
+                "points": points,
+            },
+        )
+    except Exception as e:
+        print(f"Error in /collection/heatmap: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.get("/collection/violations/{violation_id}")
+async def collection_violation_detail(violation_id: str):
+    """Single violation record with image/json URLs and system model outputs."""
+    try:
+        record = find_evidence_by_id(violation_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"Violation not found: {violation_id}")
+
+        enriched = enrich_evidence_record(record)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "record": enriched,
+                "system_outputs": get_system_model_outputs(record),
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in /collection/violations/{{id}}: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/collection/verify")
+async def collection_verify_violation(body: VerifyViolationRequest):
+    """
+    Self-verification for RL retraining.
+
+    Copies the violation image + labels into /data/rl_training/confirmed or
+    /data/rl_training/corrections. Original evidence is kept for /violations.
+    """
+    try:
+        ok, result = verify_violation_for_training(
+            violation_id=body.violation_id,
+            violation_confirmed=body.violation_confirmed,
+            ocr=body.ocr.model_dump(),
+            license_plate=body.license_plate.model_dump(),
+            vehicle=body.vehicle.model_dump(),
+            annotation_notes=body.annotation_notes,
+            helmet=body.helmet.model_dump() if body.helmet else None,
+            seatbelt=body.seatbelt.model_dump() if body.seatbelt else None,
+        )
+        if not ok:
+            raise HTTPException(status_code=400, detail=result.get("error", "Verification failed"))
+
+        stats = get_training_stats()
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "training_record": result,
+                "training_stats": stats,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in /collection/verify: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.get("/collection/training")
+async def collection_training_data(
+    category: Optional[str] = Query(
+        None,
+        description="Filter by 'confirmed' or 'corrections'",
+    ),
+):
+    """List RL training samples with image/json URLs."""
+    try:
+        if category is not None and category not in ("confirmed", "corrections"):
+            raise HTTPException(
+                status_code=400,
+                detail="category must be 'confirmed' or 'corrections'",
+            )
+
+        records = load_all_training_data(category=category)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "static_prefix": training_static_prefix(),
+                "training_folder": Config.RL_TRAINING_FOLDER,
+                "total_records": len(records),
+                "records": records,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in /collection/training: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.get("/collection/training/stats")
+async def collection_training_stats():
+    """
+    RL dataset counts and retraining readiness (default threshold: 1000 corrections).
+    Set RL_RETRAIN_THRESHOLD env var to change (e.g. 2000).
+    """
+    try:
+        stats = get_training_stats()
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "stats": stats,
+            },
+        )
+    except Exception as e:
+        print(f"Error in /collection/training/stats: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -389,6 +621,31 @@ async def info():
                     "path": "/face-match/violation",
                     "description": "Compare person against stored violation(s)",
                     "parameters": ["person_image", "violation_id OR scan_all_violations"],
+                },
+                "collection_violations": {
+                    "method": "GET",
+                    "path": "/collection/violations",
+                    "description": "Violation log with GPS, timestamps, and image URLs",
+                },
+                "collection_heatmap": {
+                    "method": "GET",
+                    "path": "/collection/heatmap",
+                    "description": "GPS points for map heatmap overlay",
+                },
+                "collection_verify": {
+                    "method": "POST",
+                    "path": "/collection/verify",
+                    "description": "Self-verify violation for RL retraining dataset",
+                },
+                "collection_training": {
+                    "method": "GET",
+                    "path": "/collection/training",
+                    "description": "List RL training samples (confirmed/corrections)",
+                },
+                "collection_training_stats": {
+                    "method": "GET",
+                    "path": "/collection/training/stats",
+                    "description": "RL dataset counts and retraining readiness",
                 },
             },
             "models": {

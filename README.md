@@ -1,7 +1,6 @@
 
 ---
 title: My Backend App
-emoji: 🚀
 colorFrom: blue
 colorTo: indigo
 sdk: docker
@@ -11,115 +10,165 @@ pinned: false
 
 # Traffic Violation Detection System
 
-A production-ready, scalable FastAPI-based computer vision system for detecting traffic violations and extracting license plate information using pre-trained deep learning models.
+A production-ready computer vision system for detecting traffic violations, extracting license plate information, and managing violation evidence. The backend is a FastAPI application with lazy-loaded YOLO models; a Next.js frontend (deployed separately on Vercel) communicates with the API for analysis, violation logs, statistics, and face matching.
 
-## 🎯 Features
+## Features
 
 ### Core Detection Capabilities
-- **Vehicle Detection**: Detects cars, motorcycles, trucks, buses, and pedestrians using YOLOv11 models
-- **License Plate Recognition**: Detects license plates and extracts text using RapidOCR
-- **Helmet Detection**: Identifies riders without helmets (2-wheelers)
-- **Seatbelt Detection**: Detects drivers/passengers not wearing seatbelts (cars, trucks)
-- **Facial Recognition** (Optional): Matches detected faces against a face database using DeepFace
+- **Vehicle Detection**: Detects cars, motorcycles, trucks, buses, and pedestrians using YOLOv11 models (BDD100K primary, UVH fallback for 3-wheelers and specific vehicle types)
+- **License Plate Recognition**: Detects license plates on cropped vehicle regions and extracts text using RapidOCR
+- **Helmet Detection**: Identifies riders without helmets on the full frame
+- **Seatbelt Detection**: Detects drivers/passengers not wearing seatbelts on the full frame
+- **Triple Riding Detection**: Flags two-wheelers with three or more detected persons inside the vehicle bounding box
+- **Stop-Line Video Analysis**: Processes uploaded video for stop-line violations with optional custom stop line and traffic light state
+- **Face Matching**: Compares uploaded face images against stored violation images or scans the full violation database using DeepFace (Facenet512 + RetinaFace)
+
+### Data Collection and Retraining Support
+- **Persistent Evidence Storage**: Violation JSON and annotated images stored under `/data/evidence` in Docker/Hugging Face Spaces, or `./evidence` locally
+- **Collection API**: Enriched violation records with browser-accessible image URLs for frontend logs and map heatmaps
+- **RL Self-Verification**: Human review workflow that copies verified samples into `/data/rl_training/confirmed` or `/data/rl_training/corrections` for model retraining
 
 ### Architecture
 - **Modular Design**: Each processing step is independent and easily extensible
 - **Lazy Model Loading**: Models load only when first needed, reducing memory overhead
 - **Lenient Error Handling**: Partial results returned even if some detection steps fail
 - **Millisecond-Precision Evidence**: Timestamped records prevent data collisions
-- **Configurable Everything**: All thresholds, classes, and parameters in one config file
+- **Configurable Everything**: All thresholds, classes, and parameters in `pipeline/config.py`
+- **CORS Enabled**: Backend accepts requests from local dev and Vercel deployments
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
-Round2_flipkart_hackathon/
-├── pipeline/                    # Main pipeline package
-│   ├── __init__.py             # Package initialization
-│   ├── config.py               # Centralized configuration
-│   ├── models.py               # Lazy-loading model manager
-│   ├── preprocessing.py        # Image preprocessing functions
-│   ├── ocr_processor.py        # License plate OCR
-│   ├── face_processor.py       # Optional facial recognition
-│   ├── utils.py                # Utility functions
-│   └── pipeline.py             # Main TrafficViolationPipeline class
+traffic-management-system/
+├── pipeline/                       # Backend pipeline package
+│   ├── __init__.py
+│   ├── config.py                   # Centralized configuration and paths
+│   ├── models.py                   # Lazy-loading YOLO model manager
+│   ├── preprocessing.py            # Image preprocessing chain
+│   ├── ocr_processor.py            # License plate OCR (RapidOCR)
+│   ├── pipeline.py                 # Main TrafficViolationPipeline class
+│   ├── stopline.py                 # Stop-line video violation detection
+│   ├── face_preprocessor.py        # DeepFace embedding and comparison
+│   ├── face_match_service.py       # Face match API orchestration
+│   ├── data_collection.py          # Collection, heatmap, RL verification storage
+│   └── utils.py                    # Evidence I/O, GPS validation, annotation helpers
 │
-├── evidence/                    # Auto-created: Stored evidence records
+├── app/                            # Next.js frontend pages
+├── components/                     # React UI components (analyze, violations, stats, face match)
+├── lib/api.ts                      # Frontend API client and types
+│
+├── evidence/                       # Local evidence storage (when /data/evidence is absent)
 │   ├── 2025-06-18T14-30-22.123Z.json
 │   ├── 2025-06-18T14-30-22.123Z.jpg
 │   └── ...
 │
-├── main.py                      # FastAPI application
-├── requirements.txt             # Python dependencies
-├── README.md                    # This file
+├── face_database/                  # Optional named face embeddings (.npy or embeddings.json)
 │
-├── bdd100k_opensource.pt        # Vehicle detection model (primary)
-├── UVH-26-MV-YOLOv11-S.pt      # Vehicle detection model (3-wheelers)
-├── License_plate_bb.pt         # License plate detection
-├── helmet_detection.pt         # Helmet detection
-├── seatbelt_detection.pt       # Seatbelt detection
+├── main.py                         # FastAPI application and route definitions
+├── Dockerfile                      # CUDA-enabled container for Hugging Face Spaces
+├── requirements.txt                # Python dependencies
+├── package.json                    # Next.js frontend dependencies
+├── .env.example                    # Frontend/backend environment variables
+├── vercel.json                     # Vercel deployment config
 │
-└── face_database/              # Optional: Face embeddings for recognition
-    ├── embeddings.json         # Face embeddings dictionary
-    └── (or .npy files per person)
+├── bdd100k_opensource.pt           # Vehicle detection model (primary)
+├── UVH-26-MV-YOLOv11-S.pt         # Vehicle detection model (3-wheelers / UVH triggers)
+├── License_plate_bb.pt             # License plate detection
+├── helmet_detection.pt             # Helmet detection
+├── seatbelt_detection.pt           # Seatbelt detection
+│
+├── scripts/stopline_pipeline_video.py   # Standalone stop-line script
+├── facial_recognition.ipynb             # Face verification experiments
+└── credits.md                           # Model and library attribution
 ```
+
+### Persistent Storage (Docker / Hugging Face Spaces)
+
+| Path | Purpose |
+|------|---------|
+| `/data/evidence` | Violation JSON, annotated images, and stop-line video outputs |
+| `/data/rl_training/confirmed` | Human-verified violations with correct model outputs |
+| `/data/rl_training/corrections` | False positives or model errors flagged for retraining |
+
+Locally, evidence defaults to `./evidence` and RL data to `./rl_training` unless overridden by environment variables.
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 - Python 3.8+
-- CUDA-capable GPU (optional, CPU works too)
+- Node.js 18+ (for the Next.js frontend)
+- CUDA-capable GPU (optional; CPU works but slower)
 - 8GB+ RAM recommended
 
-### 1. Create Virtual Environment
+### 1. Backend Setup
 
 ```bash
 # Navigate to project directory
-cd Round2_flipkart_hackathon
+cd traffic-management-system
 
-# Create virtual environment
+# Create and activate virtual environment (Windows)
 python -m venv traffic_venv
-
-# Activate (Windows)
 traffic_venv\Scripts\activate
 
-# Activate (Linux/Mac)
+# Create and activate virtual environment (Linux/Mac)
+python -m venv traffic_venv
 source traffic_venv/bin/activate
-```
 
-### 2. Install Dependencies
-
-```bash
+# Install Python dependencies
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. Run the API Server
+### 2. Run the API Server
 
 ```bash
-# Development (reload on code changes)
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# Default port 7860 (matches Hugging Face Spaces)
+python main.py
 
-# Production (no reload)
-uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+# Or with uvicorn directly
+uvicorn main:app --host 0.0.0.0 --port 7860
 ```
 
-Server runs at: `http://localhost:8000`
+Server runs at: `http://localhost:7860`
+
+### 3. Frontend Setup (Optional)
+
+```bash
+# Copy environment template and set backend URL
+cp .env.example .env.local
+
+# Install and run Next.js dev server
+npm install
+npm run dev
+```
+
+Frontend runs at: `http://localhost:3000` and calls the backend via `NEXT_PUBLIC_API_BASE`.
 
 ---
 
-## 📡 API Endpoints
+## API Endpoints
 
-### 1. **POST /analyze** - Main Analysis Endpoint
+### Static File Serving
+
+| Path | Description |
+|------|-------------|
+| `GET /evidence/{filename}` | Serves evidence images, JSON, and video files |
+| `GET /view-evidence/{filename}` | Alias for persistent `/data/evidence` (mounted when directory exists) |
+| `GET /view-training/{category}/{filename}` | Serves RL training images and JSON from `/data/rl_training` |
+
+---
+
+### 1. POST /analyze - Image Analysis
 
 Analyze an image for traffic violations.
 
 **Request:**
 ```bash
-curl -X POST "http://localhost:8000/analyze" \
+curl -X POST "http://localhost:7860/analyze" \
   -F "file=@image.jpg" \
   -F "timestamp=2025-06-18T14:30:22.123Z" \
   -F "gps_lat=28.6139" \
@@ -153,12 +202,12 @@ curl -X POST "http://localhost:8000/analyze" \
     "violations": [
       {
         "type": "no_helmet",
-        "vehicle_class": "motorcycle",
+        "vehicle_class": "unknown",
         "confidence": 0.87,
         "box": [200, 100, 250, 180]
       }
     ],
-    "annotated_image_path": "evidence/2025-06-18T14-30-22.123Z.jpg"
+    "annotated_image_path": "/path/to/evidence/2025-06-18T14-30-22.123Z.jpg"
   },
   "annotated_image_base64": "iVBORw0KGgo..."
 }
@@ -166,117 +215,137 @@ curl -X POST "http://localhost:8000/analyze" \
 
 ---
 
-### 2. **GET /violations** - Retrieve All Violation Records
+### 2. POST /analyze-video - Stop-Line Video Analysis
 
-Get all stored evidence records (most recent first).
+Process an uploaded video for stop-line violations.
 
-**Request:**
+**Parameters:**
+- `file` (required): Video file (mp4, mov)
+- `stop_line` (optional): Normalized stop line as JSON `[x1,y1,x2,y2]` (0..1)
+- `initial_light_state` (optional): `"red"` or `"green"`. Default: `"red"`
+- `conf_thres` (optional): Detection confidence threshold. Default: 0.3
+
+**Response includes:** `annotated_video_url`, `results_json_url`, `violations_count`, and per-frame violation details.
+
+---
+
+### 3. GET /violations - Retrieve All Evidence Records
+
+Returns all stored evidence JSON files (image records and stop-line records).
+
 ```bash
-curl "http://localhost:8000/violations"
+curl "http://localhost:7860/violations"
 ```
 
-**Response:**
+---
+
+### 4. GET /stats - Aggregated Statistics
+
+Returns violation counts, plate counts, and per-type breakdowns across all evidence records.
+
+```bash
+curl "http://localhost:7860/stats"
+```
+
+---
+
+### 5. POST /face-match/compare - Compare Two Face Images
+
+Compare an uploaded reference person image against a second uploaded image.
+
+**Parameters:** `person_image`, `target_image` (multipart file uploads)
+
+---
+
+### 6. POST /face-match/violation - Match Against Stored Violations
+
+Compare a person image against one stored violation or scan the entire violation database.
+
+**Parameters:**
+- `person_image` (required)
+- `violation_id` (optional): Evidence timestamp stem to match against
+- `scan_all_violations` (optional): Set to `true` to scan all stored violation images
+
+Provide either `violation_id` or `scan_all_violations=true`, not both.
+
+Similarity threshold is controlled by `FACE_SIMILARITY_THRESHOLD` (default 0.50).
+
+---
+
+### 7. Data Collection Endpoints
+
+These endpoints provide enriched data for frontend violation logs, map heatmaps, and RL retraining workflows.
+
+#### GET /collection/violations
+
+Full violation log with timestamps, GPS, plates, violations, and browser-accessible URLs.
+
+Query parameter: `include_zero_gps` (default `true`)
+
+Each record includes: `id`, `gps_lat`, `gps_lon`, `image_url`, `json_url`, and `system_outputs`.
+
+#### GET /collection/violations/{violation_id}
+
+Single violation record with system model output flags (OCR, license plate, vehicle detection).
+
+#### GET /collection/heatmap
+
+GPS points formatted for map heatmap rendering.
+
+Query parameter: `include_zero_gps` (default `false`)
+
+Each point includes: `lat`, `lon`, `timestamp`, `violation_types`, `weight`, `image_url`.
+
+#### POST /collection/verify
+
+Submit human verification for RL retraining. Copies the violation image and labels into the RL training folder. Original evidence remains in place.
+
+**Request body:**
 ```json
 {
-  "success": true,
-  "total_records": 42,
-  "violations": [
-    {
-      "timestamp": "2025-06-18T15:45:12.456Z",
-      "gps": [28.6150, 77.2100],
-      "plates": [...],
-      "violations": [...],
-      "annotated_image_path": "..."
-    }
-  ]
+  "violation_id": "2025-06-18T14-30-22.123Z",
+  "violation_confirmed": true,
+  "ocr": { "detected": true, "correct": false, "notes": "Wrong plate text" },
+  "license_plate": { "detected": true, "correct": true },
+  "vehicle": { "detected": true, "correct": true },
+  "helmet": { "detected": true, "correct": true },
+  "seatbelt": { "detected": false, "correct": true },
+  "annotation_notes": "Optional overall note"
 }
 ```
 
----
+Routing logic:
+- **confirmed/**: Violation is real and all model labels marked correct
+- **corrections/**: False positive or any model marked `correct: false`
 
-### 3. **GET /stats** - Get Aggregated Statistics
+#### GET /collection/training
 
-Get violation counts and statistics across all records.
+List RL training samples. Optional query parameter: `category=confirmed` or `category=corrections`.
 
-**Request:**
-```bash
-curl "http://localhost:8000/stats"
-```
+#### GET /collection/training/stats
 
-**Response:**
-```json
-{
-  "success": true,
-  "stats": {
-    "total_records": 42,
-    "total_violations": 87,
-    "total_plates": 41,
-    "average_violations_per_record": 2.07,
-    "violation_counts": {
-      "no_helmet": 45,
-      "no_seatbelt": 42
-    },
-    "vehicle_class_counts": {
-      "motorcycle": 45,
-      "car": 42
-    }
-  }
-}
-```
+Returns dataset counts, per-model error counts, and `ready_for_retraining` when corrections reach the configured threshold (default 1000, set via `RL_RETRAIN_THRESHOLD`).
 
 ---
 
-### 4. **POST /recognize-faces** - Facial Recognition (Optional)
+### 8. GET /health - Health Check
 
-Detect faces and match against face database.
-
-**Request:**
-```bash
-curl -X POST "http://localhost:8000/recognize-faces" \
-  -F "file=@image.jpg"
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "faces_detected": 2,
-  "faces": [
-    {
-      "box": [100, 50, 200, 250],
-      "identity": "John Doe",
-      "confidence": 0.92,
-      "distance": 0.35
-    }
-  ],
-  "annotated_image_base64": "iVBORw0KGgo..."
-}
-```
+Returns service status, evidence folder path, RL training folder path, and mount status.
 
 ---
 
-### 5. **GET /health** - Health Check
+### 9. GET /info - API Information
 
-```bash
-curl "http://localhost:8000/health"
-```
+Returns API metadata and a catalog of available endpoints.
 
 ---
 
-### 6. **GET /info** - API Information
+## Configuration
 
-```bash
-curl "http://localhost:8000/info"
-```
-
----
-
-## 🔧 Configuration
-
-All configuration is in `pipeline/config.py`:
+All configuration is centralized in `pipeline/config.py`. Key settings:
 
 ```python
-# Model paths
+# Model paths (project root .pt files)
 MODEL_PATHS = {
     "bdd100k": "bdd100k_opensource.pt",
     "uvh": "UVH-26-MV-YOLOv11-S.pt",
@@ -287,127 +356,159 @@ MODEL_PATHS = {
 
 # Confidence thresholds
 CONFIDENCE_THRESHOLDS = {
-    "bdd100k": 0.15,
-    "license_plate": 0.5,
-    "helmet": 0.5,
-    "seatbelt": 0.5,
+    "bdd100k": 0.45,
+    "uvh": 0.45,
+    "license_plate": 0.4,
+    "helmet": 0.4,
+    "seatbelt": 0.4,
 }
 
-# Violation class filters
+# Violation class filters (model output class names)
 VIOLATION_CLASSES = {
-    "helmet": "no-helmet",           # Filter for this class only
-    "seatbelt": "person-noseatbelt"  # Filter for this class only
+    "helmet": "Without Helmet",
+    "seatbelt": "person-noseatbelt",
 }
 ```
 
+### Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PORT` / `API_PORT` | `7860` | API server port |
+| `EVIDENCE_FOLDER` | `/data/evidence` or `./evidence` | Evidence storage path |
+| `RL_TRAINING_FOLDER` | `/data/rl_training` or `./rl_training` | RL training dataset path |
+| `RL_RETRAIN_THRESHOLD` | `1000` | Corrections count before retraining readiness |
+| `FACE_SIMILARITY_THRESHOLD` | `0.50` | Face match cosine similarity threshold |
+| `DEEPFACE_HOME` | Project root | DeepFace model weights location |
+| `CORS_ORIGINS` | `localhost:3000` | Allowed frontend origins |
+| `CORS_ORIGIN_REGEX` | `https://.*\.vercel\.app` | Regex for Vercel deployments |
+| `NEXT_PUBLIC_API_BASE` | HF Space URL | Frontend backend URL (`.env.local`) |
+
 ---
 
-## 🏗️ System Architecture
+## System Architecture
 
-### Pipeline Processing Flow
+### Image Pipeline Processing Flow
 
 ```
 User Image
-    ↓
+    |
 [1] Input Validation (GPS, Timestamp)
-    ↓
-[2] Image Preprocessing (undistort, enhance, blur-reduce, dehaze)
-    ↓
-[3] Vehicle Detection (BDD100K or UVH based on 3-wheeler check)
-    ↓
-[4] License Plate Detection (on cropped vehicle regions for accuracy)
-    ↓
+    |
+[2] Image Preprocessing
+    |-- Undistort (lens correction)
+    |-- Enhance lighting (CLAHE)
+    |-- Reduce motion blur (unsharp mask)
+    |-- ROI mask (top 20% masked to focus on road)
+    |
+[3] Vehicle Detection (BDD100K; UVH if 3-wheeler or UVH trigger vehicles detected)
+    |
+[4] License Plate Detection (on cropped vehicle regions)
+    |
 [5] OCR - Extract Plate Text (RapidOCR with white border padding)
-    ↓
-[6] Violation Detection
-    ├─ Helmet detection (if motorcycle/2-wheeler)
-    └─ Seatbelt detection (if car/truck)
-    ↓
+    |
+[6] Violation Detection (global, full frame)
+    |-- Helmet detection (Without Helmet class)
+    |-- Seatbelt detection (person-noseatbelt class)
+    |-- Triple riding (3+ persons inside two-wheeler bounding box)
+    |
 [7] Annotate Image (green vehicles, yellow plates, red violations)
-    ↓
-[8] Generate Evidence (JSON + save timestamped files)
-    ↓
+    |
+[8] Generate Evidence (timestamped JSON + annotated JPG)
+    |
 API Response (JSON + base64 annotated image)
+```
+
+### Stop-Line Video Pipeline
+
+```
+Uploaded Video
+    |
+Vehicle detection + multi-object tracking per frame
+    |
+Stop-line crossing detection (segment intersection)
+    |
+Traffic light state gating (red light violations)
+    |
+Annotated video + JSON results saved to evidence folder
 ```
 
 ---
 
-## 📊 Class Mappings
+## Class Mappings
 
 ### Vehicle Classes (BDD100K)
 ```python
 {
     "car": 0,
-    "motorcycle": 1,
+    "bike": 1,
     "truck": 2,
     "pedestrian": 3,
     "rider": 4,
     "bus": 5,
-    "train": 6,
-    "bicycle": 7,
+    "train": 6
 }
 ```
 
 ### Violation Types
-- `no_helmet`: Rider without helmet (motorcycles/2-wheelers)
-- `no_seatbelt`: Driver/passenger without seatbelt (cars/trucks)
+- `no_helmet`: Rider without helmet
+- `no_seatbelt`: Driver/passenger without seatbelt
+- `triple_riding`: Three or more persons on a two-wheeler
 
-### Violation Classes (from models)
-- **Helmet Model**: `['helmet', 'no-helmet']` → We flag `'no-helmet'`
-- **Seatbelt Model**: `['person-noseatbelt', 'person-seatbelt', 'seatbelt']` → We flag `'person-noseatbelt'`
+Stop-line video violations use a separate schema with `track_id`, `frame_idx`, `bbox`, and `light_state` fields.
+
+### Violation Classes (from detection models)
+- **Helmet Model**: Filters for `Without Helmet`
+- **Seatbelt Model**: Filters for `person-noseatbelt`
 
 ---
 
-## 🔄 How to Add New Violations
+## How to Add New Violations
 
-Adding new violations is simple and requires only 3 changes:
+Adding new violations requires three changes:
 
 ### Step 1: Add to Config (`pipeline/config.py`)
 ```python
 MODEL_PATHS = {
     # ... existing ...
-    "stop_line": "stop_line_model.pt",  # NEW
+    "new_violation": "new_violation_model.pt",
 }
 
 VIOLATION_CLASSES = {
     # ... existing ...
-    "stop_line": "crossed_line",  # NEW
+    "new_violation": "target_class_name",
 }
 ```
 
 ### Step 2: Add Loader (`pipeline/models.py`)
 ```python
-class ModelManager:
-    def load_stop_line_model(self):  # NEW
-        if self.stop_line_model is None:
-            self.stop_line_model = YOLO(Config.MODEL_PATHS["stop_line"])
-        return self.stop_line_model
+def load_new_violation_model(self):
+    if self.new_violation_model is None:
+        self.new_violation_model = YOLO(Config.MODEL_PATHS["new_violation"])
+    return self.new_violation_model
 ```
 
 ### Step 3: Add Detection Logic (`pipeline/pipeline.py`)
 ```python
-def detect_stop_line(self, image):
-    """Your detection logic here"""
-    model = self.model_manager.load_stop_line_model()
+def detect_new_violation(self, image):
+    model = self.model_manager.load_new_violation_model()
     # ... detection code ...
     return violations
 ```
 
-That's it! No changes needed to FastAPI or core pipeline structure.
+No changes to the FastAPI route structure are required unless a new input modality (e.g. a new media type) is introduced.
 
 ---
 
-## 🔐 Input Validation
-
-The system validates all inputs:
+## Input Validation
 
 ### GPS Validation
 - Latitude: -90 to 90
 - Longitude: -180 to 180
 
 ### Timestamp Validation
-- Format: ISO 8601 (e.g., "2025-06-18T14:30:22.123Z")
-- Millisecond precision to prevent collisions
+- Format: ISO 8601 (e.g., `"2025-06-18T14:30:22.123Z"`)
+- Millisecond precision to prevent filename collisions
 
 ### Image Validation
 - Must be decodable JPEG/PNG
@@ -415,33 +516,32 @@ The system validates all inputs:
 
 ---
 
-## 📈 Performance Notes
+## Performance Notes
 
-### Model Performance
+### Model Performance (approximate)
 - **Vehicle Detection**: ~150-200ms per image (GPU) / ~500-800ms (CPU)
 - **License Plate Detection**: ~50-100ms per vehicle (GPU) / ~200-300ms (CPU)
-- **OCR**: ~100-150ms per plate (CPU/GPU)
-- **Helmet/Seatbelt Detection**: ~50-100ms per vehicle (GPU) / ~200-300ms (CPU)
+- **OCR**: ~100-150ms per plate
+- **Helmet/Seatbelt Detection**: ~50-100ms per image (GPU) / ~200-300ms (CPU)
 
 ### Memory Usage
 - Single model: ~500MB - 2GB
-- All models loaded: ~5-8GB (lazy loading reduces this)
+- All models loaded: ~5-8GB (lazy loading reduces peak usage)
 - GPU VRAM: 2-4GB recommended
 
 ### Optimization Tips
-1. **Use GPU**: Install CUDA-compatible PyTorch for 3-5x speedup
-2. **Batch Processing**: Submit multiple images in sequence for better throughput
-3. **Model Pruning**: Consider quantized models for edge deployment
-4. **Workers**: Increase Uvicorn workers for concurrent requests
+1. Use GPU with CUDA-compatible PyTorch for 3-5x speedup
+2. Increase Uvicorn workers only when sufficient GPU/CPU memory is available
+3. Consider quantized models for edge deployment
 
 ---
 
-## 🧪 Testing
+## Testing
 
-### Test with Sample Image
+### Test Image Analysis
 ```bash
-curl -X POST "http://localhost:8000/analyze" \
-  -F "file=@test_images_for_preprocessing/2.jpg" \
+curl -X POST "http://localhost:7860/analyze" \
+  -F "file=@test_image.jpg" \
   -F "timestamp=2025-06-18T14:30:22.123Z" \
   -F "gps_lat=28.6139" \
   -F "gps_lon=77.2090"
@@ -449,47 +549,28 @@ curl -X POST "http://localhost:8000/analyze" \
 
 ### Check Evidence Records
 ```bash
-curl "http://localhost:8000/violations" | python -m json.tool
+curl "http://localhost:7860/violations" | python -m json.tool
+```
+
+### Check Collection Data (with image URLs)
+```bash
+curl "http://localhost:7860/collection/violations" | python -m json.tool
+curl "http://localhost:7860/collection/heatmap" | python -m json.tool
 ```
 
 ### View Statistics
 ```bash
-curl "http://localhost:8000/stats" | python -m json.tool
+curl "http://localhost:7860/stats" | python -m json.tool
+curl "http://localhost:7860/collection/training/stats" | python -m json.tool
 ```
 
 ---
 
-## 📋 Known Limitations
+## Evidence Record Format
 
-1. **3-Wheeler Detection**: Uses UVH model; accuracy depends on model quality
-2. **OCR Accuracy**: RapidOCR works best with clear, frontal plate images
-3. **Helmet Detection**: Works on cropped regions; requires clear headwear visibility
-4. **Facial Recognition**: Requires pre-populated face database; not included
-5. **GPU Memory**: All models cannot run simultaneously on <4GB VRAM
+### Image Analysis Record
 
----
-
-## 🤝 Extending the System
-
-### Adding a New Model
-1. Add model path to `config.py`
-2. Add loader method to `ModelManager`
-3. Create detection method in `TrafficViolationPipeline`
-4. (Optional) Add new API endpoint in `main.py`
-
-### Custom Preprocessing
-Edit `preprocessing.py`:
-- Add new function (e.g., `apply_contrast()`)
-- Call in `preprocess_frame()` chain
-
-### Custom Annotation Logic
-Edit `draw_bounding_boxes()` in `utils.py` to customize colors, labels, or overlay.
-
----
-
-## 📝 Evidence Record Format
-
-Each evidence record is stored as JSON:
+Each image analysis produces a paired JSON and annotated JPG file:
 
 ```json
 {
@@ -505,106 +586,171 @@ Each evidence record is stored as JSON:
   "violations": [
     {
       "type": "no_helmet",
-      "vehicle_class": "motorcycle",
+      "vehicle_class": "unknown",
       "confidence": 0.87,
       "box": [x1, y1, x2, y2]
+    },
+    {
+      "type": "triple_riding",
+      "vehicle_class": "motorcycle",
+      "confidence": 0.75,
+      "box": [x1, y1, x2, y2],
+      "person_count": 3
     }
   ],
-  "annotated_image_path": "evidence/2025-06-18T14-30-22.123Z.jpg"
+  "annotated_image_path": "/absolute/path/to/2025-06-18T14-30-22.123Z.jpg"
 }
 ```
 
+Filenames derive from the timestamp with colons replaced by dashes:
+`2025-06-18T14:30:22.123Z` becomes `2025-06-18T14-30-22.123Z`.
+
+### RL Training Record
+
+Verified samples stored under `/data/rl_training/` include the original evidence snapshot, human labels per model (OCR, license plate, vehicle, helmet, seatbelt), category, and browser-accessible image URLs.
+
 ---
 
-## 🐛 Troubleshooting
+## Known Limitations
+
+1. **3-Wheeler Detection**: Uses UVH model when triggered; accuracy depends on model quality
+2. **OCR Accuracy**: RapidOCR works best with clear, frontal plate images
+3. **Helmet/Seatbelt Detection**: Runs globally on the full frame; not linked to specific vehicle boxes
+4. **Triple Riding**: Uses helmet-model detections as person proxies inside two-wheeler boxes
+5. **Mixed Evidence Schemas**: Stop-line video JSON records appear alongside image records in `/violations`
+6. **Face Matching**: Requires DeepFace weights; optional face database must be populated manually
+7. **GPU Memory**: All models cannot run simultaneously on less than 4GB VRAM
+
+---
+
+## Extending the System
+
+### Adding a New Model
+1. Add model path to `config.py`
+2. Add loader method to `ModelManager` in `models.py`
+3. Create detection method in `TrafficViolationPipeline`
+4. Optionally add a new API endpoint in `main.py`
+
+### Custom Preprocessing
+Edit `preprocessing.py`:
+- Add a new function (e.g., contrast adjustment)
+- Call it in the `preprocess_frame()` chain
+
+### Custom Annotation Logic
+Edit `draw_bounding_boxes()` in `utils.py` to customize colors, labels, or overlays.
+
+---
+
+## Troubleshooting
 
 ### "Model not found" Error
-- Check model file paths in `config.py`
-- Ensure `.pt` files are in project root
+- Verify `.pt` model files exist in the project root
+- Check paths in `pipeline/config.py`
 
 ### Out of Memory Error
 - Reduce image size before sending
-- Disable non-essential models
-- Use CPU-optimized model versions
-- Reduce worker count
+- Use CPU inference or reduce concurrent workers
+- Ensure lazy loading is not pre-loading all models
 
 ### Low Detection Accuracy
-- Increase confidence threshold (lower = more detections)
-- Check image quality (clear, well-lit, frontal)
-- Ensure model is trained on similar dataset
+- Adjust confidence thresholds in `config.py`
+- Verify image quality (lighting, resolution, angle)
+- Confirm models are appropriate for your scene type
 
 ### OCR Not Extracting Text
-- Check plate image quality
+- Check plate crop quality
 - Ensure RapidOCR is installed: `pip install rapidocr-onnxruntime`
-- Try adjusting white border padding in `config.py`
+- Adjust `white_border_px` in `config.py` OCR parameters
+
+### Evidence Not Persisting on Hugging Face Spaces
+- Confirm the Space persistent volume is mounted at `/data`
+- Verify `/data/evidence` exists inside the container
+- Override with `EVIDENCE_FOLDER=/data/evidence` if needed
 
 ---
 
-## 📚 Dependencies
+## Dependencies
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| ultralytics | 8.0.177 | YOLO model inference |
-| fastapi | 0.104.1 | Web framework |
-| uvicorn | 0.24.0 | ASGI server |
-| opencv-python | 4.8.1.78 | Image processing |
-| rapidocr-onnxruntime | 1.3.21 | License plate OCR |
-| deepface | 0.0.100 | Facial recognition |
-| torch | 2.0.1 | Deep learning framework |
-| numpy | 1.24.3 | Numerical computing |
-| pillow | 10.0.1 | Image handling |
+### Python (requirements.txt)
+
+| Package | Purpose |
+|---------|---------|
+| fastapi | Web framework |
+| uvicorn | ASGI server |
+| python-multipart | File upload support |
+| ultralytics | YOLO model inference |
+| opencv-python-headless | Image processing |
+| numpy | Numerical computing (< 2.0) |
+| rapidocr-onnxruntime | License plate OCR |
+| pillow | Image handling |
+| deepface | Face embedding and comparison |
+| tf-keras | DeepFace backend dependency |
+
+PyTorch is provided by the Docker base image (`pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime`).
+
+### Frontend (package.json)
+
+Next.js 16, React 19, Tailwind CSS 4, SWR for data fetching, shadcn/ui components.
 
 ---
 
-## 📄 License
+## Deployment
 
-This project uses pre-trained models. Ensure compliance with each model's license before production deployment.
+### Docker / Hugging Face Spaces
+
+The included `Dockerfile` builds a CUDA-enabled container exposed on port 7860. Persistent directories are created at build time:
+
+```
+/data/evidence
+/data/rl_training/confirmed
+/data/rl_training/corrections
+```
+
+The backend is deployed to Hugging Face Spaces (`Bikki26/traffic-management-system`) via GitHub Actions sync (`.github/workflows/sync_to_hf.yml`).
+
+### Local Docker Run
+
+```bash
+docker build -t traffic-violation-api .
+docker run -p 7860:7860 \
+  -v $(pwd)/evidence:/data/evidence \
+  -v $(pwd)/rl_training:/data/rl_training \
+  traffic-violation-api
+```
+
+### Frontend (Vercel)
+
+The Next.js frontend deploys to Vercel with `NEXT_PUBLIC_API_BASE` pointing at the Hugging Face Space URL. See `.env.example` for required variables.
 
 ---
 
-## 👨‍💻 Developer Notes
+## License
+
+This project uses pre-trained models. Ensure compliance with each model's license before production deployment. See `credits.md` for attribution.
+
+---
+
+## Developer Notes
 
 ### Code Style
 - Follow PEP 8
-- Add docstrings to all functions
-- Use type hints where possible
+- Add docstrings to functions
+- Use type hints where practical
 - Keep functions focused and modular
 
 ### Logging
-- Use `print()` for now; replace with `logging` module for production
-- Check `main.py` console output for error details
+- Errors are printed to console via `print()` in route handlers
+- Replace with the `logging` module for production hardening
 
-### Testing
+### Testing Checklist
 - Test with images of varying quality and lighting
-- Test with different vehicle types
-- Validate GPS/timestamp boundaries
+- Test with different vehicle types (2-wheelers, cars, trucks)
+- Validate GPS and timestamp boundary conditions
+- Verify evidence files are written and served correctly
+- Test collection and heatmap endpoints with GPS-enabled records
 
 ---
 
-## 🚢 Deployment
-
-### Docker (Coming Soon)
-```dockerfile
-FROM python:3.9
-WORKDIR /app
-COPY . .
-RUN pip install -r requirements.txt
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-### Cloud Platforms
-- **AWS**: Elastic Container Service (ECS) or Lambda
-- **Google Cloud**: Cloud Run or App Engine
-- **Azure**: Container Instances or App Service
-
----
-
-## 📞 Support
-
-For issues or feature requests, please refer to the error messages in the API response or console output.
-
----
-
-**Last Updated**: June 18, 2025  
+**Last Updated**: June 22, 2026  
 **System Version**: 1.0.0  
 **Status**: Production Ready
