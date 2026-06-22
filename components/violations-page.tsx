@@ -405,12 +405,12 @@ function ViolationVerificationPart() {
             <>
               {/* Evidence image */}
               <Card className="bg-card border-border overflow-hidden">
-                <CardContent className="p-0">
+                <CardContent className="p-4 flex items-center justify-center bg-muted/20">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={evidenceAssetUrl(verificationData.record.image_url) || "/placeholder.svg"}
                     alt="Evidence"
-                    className="w-full h-[200px] object-cover"
+                    className="max-w-full max-h-[600px] object-contain"
                   />
                 </CardContent>
               </Card>
